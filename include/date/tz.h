@@ -2787,6 +2787,18 @@ to_gps_time(const tai_time<Duration>& t)
     return gps_clock::from_utc(tai_clock::to_utc(t));
 }
 
+using database_stream_getter = std::unique_ptr<std::istream> (*)(void);
+
+// set IANA database source as intput stream
+DATE_API void
+set_iana_db_source_stream(database_stream_getter);
+
+#ifdef _WIN32
+// set Windows time zone database source as input stream
+DATE_API void
+set_windows_xml_source_stream(database_stream_getter);
+#endif
+
 }  // namespace date
 
 #endif  // TZ_H

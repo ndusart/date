@@ -669,14 +669,11 @@ native_to_standard_timezone_name(const std::string& native_tz_name,
 // See timezone_mapping structure for more info.
 static
 std::vector<detail::timezone_mapping>
-load_timezone_mappings_from_xml_file(const std::string& input_path)
+load_timezone_mappings_from_xml_file(std::istream& is, const std::string& input_path)
 {
     std::size_t line_num = 0;
     std::vector<detail::timezone_mapping> mappings;
     std::string line;
-
-    file_streambuf ibuf(input_path);
-    std::istream is(&ibuf);
 
     auto error = [&input_path, &line_num](const char* info)
     {
@@ -3560,6 +3557,50 @@ get_version(const std::string& path)
 }
 
 static
+database_stream_getter&
+access_iana_db_source_stream()
+{
+    static database_stream_getter iana_db_getter{};
+    return iana_db_getter;
+}
+
+void
+set_iana_db_source_stream(database_stream_getter function)
+{
+    access_iana_db_source_stream() = function;
+}
+
+static
+const database_stream_getter&
+get_iana_db_source_stream()
+{
+    return access_iana_db_source_stream();
+}
+
+#ifdef _WIN32
+static
+database_stream_getter&
+access_windows_xml_source_stream()
+{
+    static database_stream_getter windows_xml_getter{};
+    return windows_xml_getter;
+}
+
+void
+set_windows_xml_source_stream(database_stream_getter function)
+{
+    access_windows_xml_source_stream() = function;
+}
+
+static
+const database_stream_getter&
+get_windows_xml_source_stream()
+{
+    return access_windows_xml_source_stream();
+}
+#endif
+
+static
 std::unique_ptr<tzdb>
 init_tzdb()
 {
@@ -3571,7 +3612,7 @@ init_tzdb()
     std::unique_ptr<tzdb> db(new tzdb);
 
 #if AUTO_DOWNLOAD
-    if (!file_exists(install))
+    if (get_iana_db_source_stream() == nullptr && !file_exists(install))
     {
         auto rv = remote_version();
         if (!rv.empty() && remote_download(rv))
@@ -3586,18 +3627,24 @@ init_tzdb()
                 throw std::runtime_error(msg);
             }
         }
-        if (!file_exists(install))
+        if (get_iana_db_source_stream() == nullptr && !file_exists(install))
         {
             std::string msg = "Timezone database not found at \"";
             msg += install;
             msg += "\"";
             throw std::runtime_error(msg);
         }
-        db->version = get_version(path);
+        if (get_iana_db_source_stream() == nullptr)
+        {
+            db->version = get_version(path);
+        }
     }
     else
     {
-        db->version = get_version(path);
+        if (get_iana_db_source_stream() == nullptr)
+        {
+            db->version = get_version(path);
+        }
         auto rv = remote_version();
         if (!rv.empty() && db->version != rv)
         {
@@ -3609,14 +3656,17 @@ init_tzdb()
         }
     }
 #else  // !AUTO_DOWNLOAD
-    if (!file_exists(install))
+    if (get_iana_db_source_stream() == nullptr && !file_exists(install))
     {
         std::string msg = "Timezone database not found at \"";
         msg += install;
         msg += "\"";
         throw std::runtime_error(msg);
     }
-    db->version = get_version(path);
+    if (get_iana_db_source_stream() == nullptr)
+    {
+        db->version = get_version(path);
+    }
 #endif  // !AUTO_DOWNLOAD
 
     CONSTDATA char*const files[] =
@@ -3625,15 +3675,24 @@ init_tzdb()
         "pacificnew", "northamerica", "southamerica", "systemv", "leapseconds"
     };
 
-    for (const auto& filename : files)
+    std::vector<std::unique_ptr<std::istream>> input_streams{};
+    if (get_iana_db_source_stream() != nullptr)
     {
-        std::string file_path = path + filename;
-        if (!file_exists(file_path))
+        auto all_iana = get_iana_db_source_stream()();
+        std::getline(*all_iana, db->version);
+        input_streams.emplace_back(std::move(all_iana));
+    }
+    else
+    {
+        for (const auto& path_file : files)
         {
-          continue;
+            input_streams.emplace_back(
+                std::make_unique<std::ifstream>(path + path_file));
         }
-        file_streambuf inbuf(file_path);
-        std::istream infile(&inbuf);
+    }
+
+    for (const auto& infile_ : input_streams) {
+        auto& infile = *infile_;
         while (infile)
         {
             std::getline(infile, line);
@@ -3687,9 +3746,28 @@ init_tzdb()
     db->leap_seconds.shrink_to_fit();
 
 #ifdef _WIN32
-    std::string mapping_file = get_install() + folder_delimiter + "windowsZones.xml";
-    db->mappings = load_timezone_mappings_from_xml_file(mapping_file);
-    sort_zone_mappings(db->mappings);
+  if (get_windows_xml_source_stream() != nullptr)
+  {
+      auto stream_ptr = get_windows_xml_source_stream()();
+      db->mappings = load_timezone_mappings_from_xml_file(*stream_ptr,
+                                                          "[stream]");
+  }
+  else
+  {
+      std::string mapping_file =
+          get_install() + folder_delimiter + "windowsZones.xml";
+      std::ifstream is(mapping_file);
+      if (!is.is_open())
+      {
+          // We don't emit file exceptions because that's an implementation detail.
+          std::string msg = "Error opening time zone mapping file \"";
+          msg += mapping_file;
+          msg += "\".";
+          throw std::runtime_error(msg);
+      }
+      db->mappings = load_timezone_mappings_from_xml_file(is, mapping_file);
+  }
+  sort_zone_mappings(db->mappings);
 #endif // _WIN32
 
     return db;
