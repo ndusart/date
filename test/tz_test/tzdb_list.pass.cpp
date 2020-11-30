@@ -1,6 +1,6 @@
 // The MIT License (MIT)
 //
-// Copyright (c) 2017 Howard Hinnant
+// Copyright (c) 2020 Howard Hinnant
 //
 // Permission is hereby granted, free of charge, to any person obtaining a copy
 // of this software and associated documentation files (the "Software"), to deal
@@ -20,19 +20,17 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 
-// Test custom time zone support
-
 #include "tz.h"
-#include "OffsetZone.h"
-#include <cassert>
+#include <type_traits>
 
 int
 main()
 {
     using namespace date;
-    using namespace std::chrono;
-    auto now = system_clock::now();
-    auto offset = hours{-4};
-    zoned_time<system_clock::duration, OffsetZone> zt{OffsetZone{offset}, now};
-    assert(zt.get_local_time().time_since_epoch() == now.time_since_epoch() + offset);
+    static_assert( std::is_nothrow_destructible<tzdb_list>{}, "");
+    static_assert( std::is_nothrow_default_constructible<tzdb_list>{}, "");
+    static_assert(!std::is_copy_constructible<tzdb_list>{}, "");
+    static_assert(!std::is_copy_assignable<tzdb_list>{}, "");
+    static_assert( std::is_nothrow_move_constructible<tzdb_list>{}, "");
+    static_assert(!std::is_move_assignable<tzdb_list>{}, "");
 }
